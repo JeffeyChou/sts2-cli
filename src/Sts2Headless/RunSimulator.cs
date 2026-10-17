@@ -2832,6 +2832,8 @@ public class RunSimulator
                 return new Dictionary<string, object?>
                 {
                     ["index"] = i,
+                    ["id"] = card?.Id.ToString(),
+                    ["upgraded"] = card?.IsUpgraded ?? false,
                     ["name"] = _loc.Card(entry),
                     ["type"] = card?.Type.ToString() ?? "?",
                     ["rarity"] = card?.Rarity.ToString() ?? "?",
@@ -2849,6 +2851,7 @@ public class RunSimulator
         var relics = inv.RelicEntries.Select((e, i) => new Dictionary<string, object?>
         {
             ["index"] = i,
+            ["id"] = e.Model?.Id.Entry,
             ["name"] = _loc.Relic(e.Model?.Id.Entry ?? "?"),
             ["description"] = _loc.Bilingual("relics", (e.Model?.Id.Entry ?? "?") + ".description"),
             ["cost"] = e.Cost,
@@ -2858,6 +2861,7 @@ public class RunSimulator
         var potions = inv.PotionEntries.Select((e, i) => new Dictionary<string, object?>
         {
             ["index"] = i,
+            ["id"] = e.Model?.Id.Entry,
             ["name"] = _loc.Potion(e.Model?.Id.Entry ?? "?"),
             ["description"] = _loc.Bilingual("potions", (e.Model?.Id.Entry ?? "?") + ".description"),
             ["cost"] = e.Cost,
@@ -3154,6 +3158,7 @@ public class RunSimulator
                 try { foreach (var dv in r.DynamicVars.Values) vars[dv.Name] = (int)dv.BaseValue; } catch { }
                 return new Dictionary<string, object?>
                 {
+                    ["id"] = r.Id.Entry,
                     ["name"] = _loc.Relic(r.Id.Entry),
                     ["description"] = _loc.Bilingual("relics", r.Id.Entry + ".description"),
                     ["vars"] = vars.Count > 0 ? vars : null,
@@ -3167,6 +3172,7 @@ public class RunSimulator
                 return new Dictionary<string, object?>
                 {
                     ["index"] = i,
+                    ["id"] = p.Id.Entry,
                     ["name"] = _loc.Potion(p.Id.Entry),
                     ["description"] = _loc.Bilingual("potions", p.Id.Entry + ".description"),
                     ["vars"] = pvars.Count > 0 ? pvars : null,
