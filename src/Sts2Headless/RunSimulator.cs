@@ -216,6 +216,8 @@ public class RunSimulator
     private readonly ManualResetEventSlim _combatEnded = new(false);
     private static readonly LocLookup _loc = new();
     private bool _eventOptionChosen;
+    // Background Chosen() task of the current event option; it may still be running after a card selection resolves.
+    private Task? _eventChooseTask;
     private int _lastEventOptionCount;
 
     // Pending rewards for card selection (populated after combat, before proceeding)
@@ -1009,12 +1011,17 @@ public class RunSimulator
         var handCountBefore = hand.Count;
 
         var playAction = new PlayCardAction(card, target);
+        // A played card can legitimately come back to the same hand slot (Feral returns the
+        // first 0-cost Attack each turn), so only treat "still in hand" as a failure when the
+        // action never executed.
+        var executed = false;
+        playAction.BeforeExecuted += _ => executed = true;
         RunManager.Instance.ActionQueueSet.EnqueueWithoutSynchronizing(playAction);
         WaitForActionExecutor();
 
         // Check if card play had no effect (hand unchanged, same card still at same index)
         var handAfter = pcs.Hand.Cards;
-        if (handAfter.Count == handCountBefore && cardIndex < handAfter.Count && handAfter[cardIndex] == card)
+        if (!executed && handAfter.Count == handCountBefore && cardIndex < handAfter.Count && handAfter[cardIndex] == card)
         {
             return Error($"Card could not be played (still in hand after action): {card.GetType().Name} [{card.Id}]");
         }
@@ -1445,6 +1452,7 @@ public class RunSimulator
         _cardSelector.ResolvePendingByIndices(indices);
         _syncCtx.Pump();
         WaitForActionExecutor();
+        WaitForEventChooseTask();
 
         // Extra wait for rest-site SMITH: the background ChooseLocalOption task
         // needs time to complete the upgrade after card selection resolves.
@@ -1479,6 +1487,7 @@ public class RunSimulator
             _cardSelector.CancelPending();
             _syncCtx.Pump();
             WaitForActionExecutor();
+            WaitForEventChooseTask();
         }
         return DetectDecisionPoint();
     }
@@ -1649,6 +1658,7 @@ public class RunSimulator
                         _lastEventOptionCount = options.Count;
                         // Run on thread pool so GetSelectedCards/GetSelectedCardReward can block
                         var task = Task.Run(() => options[optionIndex].Chosen());
+                        _eventChooseTask = task;
                         for (int i = 0; i < 100; i++)
                         {
                             _syncCtx.Pump();
@@ -2878,6 +2888,28 @@ public class RunSimulator
     #endregion
 
     #region Helpers
+
+    /// <summary>
+    /// After a selection resolves inside an event, the option's Chosen() continuation keeps
+    /// running on the thread pool. Reading the decision point before it finishes returns the
+    /// stale option page (Neow re-offered its blessings until a wall-clock race resolved).
+    /// Pump until the task completes or it blocks on another selection.
+    /// </summary>
+    private void WaitForEventChooseTask()
+    {
+        var task = _eventChooseTask;
+        if (task == null || _runState?.CurrentRoom is not EventRoom) return;
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!task.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            _syncCtx.Pump();
+            if (_cardSelector.HasPending || _cardSelector.HasPendingReward || _pendingBundles != null) return;
+            Thread.Sleep(1);
+        }
+        if (!task.IsCompleted) Log("WaitForEventChooseTask: timed out");
+        _syncCtx.Pump();
+        WaitForActionExecutor();
+    }
 
     private void WaitForActionExecutor()
     {
