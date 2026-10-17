@@ -2361,6 +2361,11 @@ public class RunSimulator
             ["player_powers"] = playerPowers?.Count > 0 ? playerPowers : null,
             ["draw_pile_count"] = pcs?.DrawPile?.Cards?.Count ?? 0,
             ["discard_pile_count"] = pcs?.DiscardPile?.Cards?.Count ?? 0,
+            // Pile contents are visible to a human player (draw pile shown unordered), so expose them
+            // sorted by id to avoid leaking the hidden draw order.
+            ["draw_pile"] = pcs?.DrawPile?.Cards?.Select(c => c.Id.ToString() + (c.IsUpgraded ? "+" : "")).OrderBy(x => x).ToList(),
+            ["discard_pile"] = pcs?.DiscardPile?.Cards?.Select(c => c.Id.ToString() + (c.IsUpgraded ? "+" : "")).ToList(),
+            ["exhaust_pile"] = pcs?.ExhaustPile?.Cards?.Select(c => c.Id.ToString() + (c.IsUpgraded ? "+" : "")).ToList(),
         };
 
         // Character-specific mechanics
