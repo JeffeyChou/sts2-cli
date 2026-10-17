@@ -552,6 +552,7 @@ public class RunSimulator
 
             var save = readResult.SaveData;
             Log($"Save loaded: seed={save.SerializableRng?.Seed}, act={save.CurrentActIndex}, ascension={save.Ascension}");
+            if (_runState != null) ResetForNewRun();
 
             _runState = RunState.FromSerializable(save);
             if (_runState == null)
@@ -563,8 +564,12 @@ public class RunSimulator
             RunManager.Instance.SetUpSavedSingleplayer(_runState, save).GetAwaiter().GetResult();
             LocalContext.NetId = netService.NetId;
 
-            CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
-            CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
+            if (!_combatHandlersRegistered)
+            {
+                CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
+                CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
+                _combatHandlersRegistered = true;
+            }
             if (!_selectorInstalled) { CardSelectCmd.UseSelector(_cardSelector); _selectorInstalled = true; }
             LocPatches._bundleSimRef = this;
 
