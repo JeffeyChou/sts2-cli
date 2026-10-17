@@ -318,6 +318,51 @@ foreach (var type in module.Types)
     }
 }
 
+// Patch 6: event models (Models.Events.*) drive event-room UI nodes directly, e.g. The Trial's Accept
+// starts with NEventRoom.Instance.Layout.RemoveNodesOnPortrait(); with no UI the NRE aborted the option.
+// In event code, calls to UI node types (MegaCrit.Sts2.Core.Nodes.*) become stack-neutral no-ops:
+// void -> pop receiver+args; reference-returning -> pop receiver+args, push null (so chains go null).
+// Static UI calls are handled the same way. Value-returning calls are left untouched.
+int uiSites = 0;
+foreach (var type in AllTypes(module.Types))
+{
+    var ns = type.DeclaringType?.Namespace ?? type.Namespace;
+    for (var dt = type.DeclaringType; dt != null; dt = dt.DeclaringType) ns = dt.Namespace;
+    if (ns != "MegaCrit.Sts2.Core.Models.Events") continue;
+    foreach (var method in type.Methods)
+    {
+        if (method.Body == null) continue;
+        var ins = method.Body.Instructions;
+        for (int k = 0; k < ins.Count; k++)
+        {
+            if ((ins[k].OpCode != OpCodes.Callvirt && ins[k].OpCode != OpCodes.Call) || ins[k].Operand is not MethodReference mr) continue;
+            var declNs = mr.DeclaringType.Namespace;
+            for (var d = mr.DeclaringType.DeclaringType; d != null; d = d.DeclaringType) declNs = d.Namespace;
+            bool uiNode = declNs.StartsWith("MegaCrit.Sts2.Core.Nodes");
+            // Godot scene-graph classes (PackedScene.Instantiate, Node2D.set_Position, ...); structs like Vector2 stay
+            bool godotRef = declNs == "Godot" && !mr.DeclaringType.IsValueType && mr.DeclaringType.Resolve()?.IsValueType == false;
+            if (!uiNode && !godotRef) continue;
+            if (mr.Name == "get_Instance") continue;  // keep the (null) singleton load; its uses are neutralized
+            var ret = mr.ReturnType;
+            if (ret.IsGenericParameter && mr is GenericInstanceMethod gim && gim.GenericArguments.Count == 1)
+                ret = gim.GenericArguments[0];  // e.g. PackedScene.Instantiate<Node2D>() -> Node2D
+            bool isVoid = ret.MetadataType == MetadataType.Void;
+            bool isRef = !isVoid && !ret.IsValueType && !ret.IsGenericParameter && ret.Resolve()?.IsValueType != true;
+            if (!isVoid && !isRef) continue;
+            int pops = mr.Parameters.Count + (mr.HasThis ? 1 : 0);
+            var first = ins[k];
+            if (pops == 0) { first.OpCode = OpCodes.Nop; first.Operand = null; }
+            else { first.OpCode = OpCodes.Pop; first.Operand = null; }
+            int at = k + 1;
+            for (int q = 1; q < pops; q++) ins.Insert(at++, Instruction.Create(OpCodes.Pop));
+            if (isRef) ins.Insert(at++, Instruction.Create(OpCodes.Ldnull));
+            uiSites++;
+            if (uiSites <= 400) Console.WriteLine($"  Patched {type.FullName}.{method.Name}: UI call {mr.DeclaringType.Name}.{mr.Name}");
+        }
+    }
+}
+patches += uiSites;
+
 // The Windows build marks pure-IL sts2.dll as x64-only; mark AnyCPU so arm64 hosts can load it.
 if (module.Architecture != TargetArchitecture.I386 && module.Attributes.HasFlag(ModuleAttributes.ILOnly))
 {
