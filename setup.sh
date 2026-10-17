@@ -244,7 +244,11 @@ foreach (var type in module.Types)
 // NGame.Instance.ScreenShake*/ScreenRumble unguarded; NGame.Instance is null headless, so the
 // event option throws and silently never completes. Replace those void calls with pops of the
 // receiver and arguments. UI node code (MegaCrit.Sts2.Core.Nodes.*) is left untouched.
-var shakeNames = new HashSet<string> { "ScreenShake", "ScreenRumble", "ScreenShakeTrauma" };
+var removeCalls = new Dictionary<string, HashSet<string>> {
+    ["NGame"] = new() { "ScreenShake", "ScreenRumble", "ScreenShakeTrauma" },
+    // NAudioManager.Instance is null headless; Kaiser Crab's BeforeDeath calls it unguarded.
+    ["NAudioManager"] = new() { "PlayOneShot" },
+};
 IEnumerable<TypeDefinition> AllTypes(IEnumerable<TypeDefinition> ts) { foreach (var t in ts) { yield return t; foreach (var n in AllTypes(t.NestedTypes)) yield return n; } }
 foreach (var type in AllTypes(module.Types))
 {
@@ -256,15 +260,61 @@ foreach (var type in AllTypes(module.Types))
         for (int k = 0; k < ins.Count; k++)
         {
             if ((ins[k].OpCode == OpCodes.Callvirt || ins[k].OpCode == OpCodes.Call) && ins[k].Operand is MethodReference mr
-                && mr.DeclaringType.Name == "NGame" && shakeNames.Contains(mr.Name) && mr.ReturnType.MetadataType == MetadataType.Void)
+                && removeCalls.TryGetValue(mr.DeclaringType.Name, out var names) && names.Contains(mr.Name)
+                && mr.ReturnType.MetadataType == MetadataType.Void)
             {
                 int pops = mr.Parameters.Count + 1;
                 ins[k].OpCode = OpCodes.Pop; ins[k].Operand = null;
                 for (int q = 1; q < pops; q++) ins.Insert(k + 1, Instruction.Create(OpCodes.Pop));
                 patches++;
-                Console.WriteLine($"  Patched {type.FullName}.{method.Name}: NGame.{mr.Name} -> pop x{pops}");
+                Console.WriteLine($"  Patched {type.FullName}.{method.Name}: {mr.DeclaringType.Name}.{mr.Name} -> pop x{pops}");
             }
         }
+    }
+}
+
+// Patch 5: monsters whose moves drive a combat-room background node (Kaiser Crab: Crusher/Rocket).
+// Their Background getter throws without NCombatRoom, which aborted every move before its damage.
+// The getter now returns an inert instance and the node's animation methods are no-ops.
+var getUninit = module.ImportReference(typeof(System.Runtime.CompilerServices.RuntimeHelpers).GetMethod("GetUninitializedObject")!);
+var getTypeFromHandle = module.ImportReference(typeof(Type).GetMethod("GetTypeFromHandle")!);
+var completedTask = module.ImportReference(typeof(System.Threading.Tasks.Task).GetProperty("CompletedTask")!.GetGetMethod()!);
+var inertNodeTypes = new HashSet<string>();
+foreach (var type in module.Types)
+{
+    if (type.Namespace != "MegaCrit.Sts2.Core.Models.Monsters") continue;
+    foreach (var method in type.Methods)
+    {
+        if (method.Name != "get_Background" || method.Body == null) continue;
+        var rt = method.ReturnType.Resolve();
+        if (rt == null || !rt.Namespace.StartsWith("MegaCrit.Sts2.Core.Nodes")) continue;
+        var il = method.Body.GetILProcessor();
+        il.Body.Instructions.Clear(); il.Body.ExceptionHandlers.Clear(); il.Body.Variables.Clear();
+        il.Emit(OpCodes.Ldtoken, method.ReturnType);
+        il.Emit(OpCodes.Call, getTypeFromHandle);
+        il.Emit(OpCodes.Call, getUninit);
+        il.Emit(OpCodes.Castclass, method.ReturnType);
+        il.Emit(OpCodes.Ret);
+        inertNodeTypes.Add(rt.FullName);
+        patches++;
+        Console.WriteLine($"  Patched {type.Name}.get_Background -> inert {rt.Name}");
+    }
+}
+foreach (var type in module.Types)
+{
+    if (!inertNodeTypes.Contains(type.FullName)) continue;
+    foreach (var method in type.Methods)
+    {
+        if (method.Body == null || method.IsStatic || method.IsConstructor || !method.IsPublic) continue;
+        bool isVoid = method.ReturnType.MetadataType == MetadataType.Void;
+        bool isTask = method.ReturnType.FullName == "System.Threading.Tasks.Task";
+        if (!isVoid && !isTask) continue;
+        var il = method.Body.GetILProcessor();
+        il.Body.Instructions.Clear(); il.Body.ExceptionHandlers.Clear(); il.Body.Variables.Clear();
+        if (isTask) il.Emit(OpCodes.Call, completedTask);
+        il.Emit(OpCodes.Ret);
+        patches++;
+        Console.WriteLine($"  Patched {type.Name}.{method.Name} -> no-op");
     }
 }
 

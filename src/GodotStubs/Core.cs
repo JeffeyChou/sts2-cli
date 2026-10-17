@@ -7,6 +7,9 @@ public class GodotObject
     public class SignalName { }
 
     public static bool IsInstanceValid(GodotObject? obj) => obj != null;
+    public Error Connect(StringName signal, Callable callable, uint flags = 0) => Error.Ok;
+    public void Disconnect(StringName signal, Callable callable) { }
+    public Variant CallDeferred(StringName method, params Variant[] args) => default;
     public virtual bool IsQueuedForDeletion() => false;
 
     // ToSignal - must be on GodotObject (not Node) to match real Godot
@@ -73,7 +76,10 @@ public class Node : GodotObject
         _children.Remove(child);
     }
 
-    public void Reparent(Node newParent)
+    public int GetIndex(bool includeInternal = false) => _parent?._children.IndexOf(this) ?? -1;
+    public NodePath GetPath() => new NodePath(Name.ToString());
+
+    public void Reparent(Node newParent, bool keepGlobalTransform = true)
     {
         _parent?.RemoveChild(this);
         newParent.AddChild(this);
@@ -122,6 +128,11 @@ public class SceneTree : MainLoop
 
 public class SceneTreeTimer : GodotObject
 {
+    public new class SignalName : GodotObject.SignalName
+    {
+        public static readonly StringName Timeout = "timeout";
+    }
+
     public event Action? Timeout;
 
     internal void FireTimeout()

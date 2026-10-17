@@ -250,6 +250,11 @@ public class RunSimulator
         try { RunManager.Instance.CleanUp(true); }
         catch (Exception ex) { Log($"CleanUp: {ex.Message}"); }
         _syncCtx.Pump();
+        // Completing the old run's prompts above runs its continuations inline, which can open new
+        // prompts for the dead run; drop them so they don't leak into the next run.
+        _cardSelector.Drop();
+        _pendingBundles = null;
+        _pendingBundleTcs = null;
         _runState = null;
         _eventOptionChosen = false;
         _eventChooseTask = null;
@@ -3201,6 +3206,7 @@ public class RunSimulator
         // moves (e.g. BygoneEffigy.WakeMove) NRE in headless and break the enemy turn.
         PatchTalkCmd();
         PatchDebugAudio();
+        PatchCrystalSphere();
 
         // Initialize localization system (needed for events, cards, etc.)
         InitLocManager();
@@ -3396,6 +3402,65 @@ public class RunSimulator
         public static bool InstancePrefix(ref object __result) { __result = Dummy!; return false; }
     }
 
+    /// <summary>
+    /// Crystal Sphere (event) runs an 11x11 fog minigame through a UI screen that can't exist headless,
+    /// so the option never finished. Play it deterministically instead: each divination clicks the
+    /// 3x3 spot that uncovers the most hidden cells (public information only), then run the game's
+    /// own completion/reward logic.
+    /// </summary>
+    private static void PatchCrystalSphere()
+    {
+        try
+        {
+            var harmony = new Harmony("sts2headless.crystalsphere");
+            var t = typeof(CombatManager).Assembly.GetType("MegaCrit.Sts2.Core.Events.Custom.CrystalSphereEvent.CrystalSphereMinigame");
+            var play = t?.GetMethod("PlayMinigame");
+            if (play == null) { Console.Error.WriteLine("[WARN] CrystalSphereMinigame.PlayMinigame not found"); return; }
+            harmony.Patch(play, new HarmonyMethod(typeof(CrystalSpherePatches).GetMethod(nameof(CrystalSpherePatches.PlayPrefix))));
+            Console.Error.WriteLine("[INFO] Patched CrystalSphereMinigame to auto-play headless");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[WARN] Failed to patch CrystalSphereMinigame: {ex.Message}");
+        }
+    }
+
+    internal static class CrystalSpherePatches
+    {
+        public static bool PlayPrefix(object __instance, ref Task __result)
+        {
+            __result = AutoPlay(__instance);
+            return false;
+        }
+
+        private static async Task AutoPlay(object game)
+        {
+            var t = game.GetType();
+            var cells = (Array)t.GetField("cells")!.GetValue(game)!;
+            int w = cells.GetLength(0), h = cells.GetLength(1);
+            var countProp = t.GetProperty("DivinationCount")!;
+            var clicked = t.GetMethod("CellClicked")!;
+            var hiddenProp = cells.GetValue(0, 0)!.GetType().GetProperty("IsHidden")!;
+            bool Hidden(int x, int y) => x >= 0 && y >= 0 && x < w && y < h && (bool)hiddenProp.GetValue(cells.GetValue(x, y))!;
+            for (int guard = 0; (int)countProp.GetValue(game)! > 0 && guard < 50; guard++)
+            {
+                int bx = w / 2, by = h / 2, best = -1;
+                for (int x = 0; x < w; x++)
+                for (int y = 0; y < h; y++)
+                {
+                    int n = 0;
+                    for (int dx = -1; dx <= 1; dx++)
+                    for (int dy = -1; dy <= 1; dy++)
+                        if (Hidden(x + dx, y + dy)) n++;
+                    if (n > best) { best = n; bx = x; by = y; }
+                }
+                await (Task)clicked.Invoke(game, new[] { cells.GetValue(bx, by) })!;
+            }
+            var complete = t.GetMethod("CompleteMinigame", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            await (Task)complete.Invoke(game, null)!;
+        }
+    }
+
     private static void PatchTaskYield()
     {
         try
@@ -3489,6 +3554,15 @@ public class RunSimulator
                 .Select(i => PendingOptions[i])
                 .ToList();
             ResolvePending(selected);
+        }
+
+        /// <summary>Forget any pending request without completing it (stale prompts from a torn-down run).</summary>
+        public void Drop()
+        {
+            PendingOptions = null;
+            _pendingTcs = null;
+            PendingRewardCards = null;
+            _rewardWait = null;
         }
 
         public void CancelPending()

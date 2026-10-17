@@ -49,6 +49,7 @@ public struct Vector2I
     public int Y;
     public Vector2I(int x, int y) { X = x; Y = y; }
     public static Vector2I Zero { get; } = new(0, 0);
+    public static Vector2I One { get; } = new(1, 1);
     public static implicit operator Vector2(Vector2I v) => new(v.X, v.Y);
 }
 
@@ -121,6 +122,7 @@ public static class Mathf
     public static float Cos(float s) => MathF.Cos(s);
     public static float Tan(float s) => MathF.Tan(s);
     public static float Sqrt(float s) => MathF.Sqrt(s);
+    public static float Log(float s) => MathF.Log(s);
     public static float Pow(float @base, float exp) => MathF.Pow(@base, exp);
     public static float Abs(float s) => MathF.Abs(s);
     public static float Floor(float s) => MathF.Floor(s);

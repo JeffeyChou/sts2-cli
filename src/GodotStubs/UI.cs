@@ -11,6 +11,9 @@ public class CanvasItem : Node
     public bool IsVisibleInTree() => Visible;
     public Tween CreateTween() => new Tween();
     public Rect2 GetViewportRect() => new Rect2(Vector2.Zero, new Vector2(1920, 1080));
+    public Material? Material { get; set; }
+    public void SetVisible(bool visible) => Visible = visible;
+    public void SetSelfModulate(Color color) => SelfModulate = color;
 }
 
 // Control
@@ -41,6 +44,12 @@ public class Control : CanvasItem
     public FocusModeEnum FocusMode { get; set; }
     public MouseFilterEnum MouseFilter { get; set; }
     public string TooltipText { get; set; } = "";
+    public NodePath? FocusNeighborBottom { get; set; }
+    public NodePath? FocusNeighborLeft { get; set; }
+    public NodePath? FocusNeighborRight { get; set; }
+    public NodePath? FocusNeighborTop { get; set; }
+    public void SetAnchorsPreset(LayoutPreset preset, bool keepOffsets = false) { }
+    public void SetFocusMode(FocusModeEnum mode) => FocusMode = mode;
 
     public Rect2 GetViewportRect() => new Rect2(0, 0, 1920, 1080);
     public void GrabFocus() { }
@@ -74,6 +83,7 @@ public class Node2D : CanvasItem
 // Resource
 public class Resource : GodotObject
 {
+    public Resource Duplicate(bool subresources = false) => (Resource)MemberwiseClone();
     public string ResourcePath { get; set; } = "";
     public class MethodName { }
     public class PropertyName { }
@@ -178,7 +188,9 @@ public class TextureRect : Control
     public new class MethodName : Control.MethodName { }
     public new class PropertyName : Control.PropertyName { }
     public new class SignalName : Control.SignalName { }
+    public enum ExpandModeEnum { KeepSize, IgnoreSize, FitWidth, FitWidthProportional, FitHeight, FitHeightProportional }
     public Texture2D? Texture { get; set; }
+    public ExpandModeEnum ExpandMode { get; set; }
 }
 
 public class ColorRect : Control
@@ -347,6 +359,9 @@ public class FileAccess : GodotObject, IDisposable
 // DirAccess
 public class DirAccess : GodotObject, IDisposable
 {
+    public Error ListDirBegin() => Error.Ok;
+    public string GetNext() => "";
+    public bool CurrentIsDir() => false;
     public static bool DirExistsAbsolute(string path) => Directory.Exists(path);
     public static Error MakeDirAbsolute(string path) { try { Directory.CreateDirectory(path); return Error.Ok; } catch { return Error.Failed; } }
     public static Error MakeDirRecursiveAbsolute(string path) { try { Directory.CreateDirectory(path); return Error.Ok; } catch { return Error.Failed; } }
