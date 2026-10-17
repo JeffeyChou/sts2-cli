@@ -1444,6 +1444,7 @@ public class RunSimulator
         {
             // Run on background thread so card selection can pause (same pattern as event options)
             var task = Task.Run(() => removal.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()));
+            _shopTask = task;
             for (int i = 0; i < 100; i++)
             {
                 _syncCtx.Pump();
@@ -1512,7 +1513,8 @@ public class RunSimulator
         // needs time to complete the upgrade after card selection resolves.
         if (_runState?.CurrentRoom is RestSiteRoom)
         {
-            Thread.Sleep(200);
+            // wait for the rest option's task (the upgrade) instead of a fixed 200 ms sleep
+            WaitForTask(_restTask, 2000);
             _syncCtx.Pump();
             WaitForActionExecutor();
             // Force to map after SMITH completes (same pattern as HEAL)
@@ -1524,7 +1526,7 @@ public class RunSimulator
         // Extra wait for shop card removal: the purchase task needs to finish
         if (_runState?.CurrentRoom is MerchantRoom)
         {
-            Thread.Sleep(200);
+            WaitForTask(_shopTask, 2000);  // was a fixed 200 ms sleep
             _syncCtx.Pump();
             WaitForActionExecutor();
             Log("Card selection in shop (card removal), refreshing shop state");
@@ -1659,6 +1661,7 @@ public class RunSimulator
             {
                 // Run on background thread so Smith card selection can pause
                 var task = Task.Run(() => RunManager.Instance.RestSiteSynchronizer.ChooseLocalOption(optionIndex));
+                _restTask = task;
                 for (int i = 0; i < 100; i++)
                 {
                     _syncCtx.Pump();
@@ -1687,7 +1690,7 @@ public class RunSimulator
                 // Give the action time to complete (heal HP, dig for relic, etc.)
                 WaitForActionExecutor();
                 _syncCtx.Pump();
-                Thread.Sleep(200);
+                WaitForTask(_restTask, 2000);  // was a fixed 200 ms sleep (~40% of rollout wall time)
                 _syncCtx.Pump();
                 WaitForActionExecutor();
                 ForceToMap();
@@ -2954,6 +2957,22 @@ public class RunSimulator
     /// stale option page (Neow re-offered its blessings until a wall-clock race resolved).
     /// Pump until the task completes or it blocks on another selection.
     /// </summary>
+    private Task? _restTask;
+    private Task? _shopTask;
+
+    /// <summary>Pump until the task completes (or it blocks on a new prompt / times out).</summary>
+    private void WaitForTask(Task? task, int timeoutMs)
+    {
+        if (task == null) return;
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (!task.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            _syncCtx.Pump();
+            if (_cardSelector.HasPending || _cardSelector.HasPendingReward || _pendingBundles != null) return;
+            Thread.Sleep(1);
+        }
+    }
+
     private void WaitForEventChooseTask()
     {
         var task = _eventChooseTask;
