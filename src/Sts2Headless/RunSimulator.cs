@@ -1434,6 +1434,7 @@ public class RunSimulator
 
         _syncCtx.Pump();
         WaitForActionExecutor();
+        WaitForEventChooseTask();
         return DetectDecisionPoint();
     }
 
