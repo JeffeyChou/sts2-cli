@@ -3122,6 +3122,7 @@ public class RunSimulator
                     ["name"] = _loc.Card(c.Id.Entry),
                     ["cost"] = c.EnergyCost?.GetResolved() ?? 0,
                     ["type"] = c.Type.ToString(),
+                    ["rarity"] = c.Rarity.ToString(),
                     ["upgraded"] = c.IsUpgraded,
                     ["description"] = _loc.Bilingual("cards", c.Id.Entry + ".description"),
                     ["stats"] = dstats.Count > 0 ? dstats : null,
