@@ -231,6 +231,38 @@ public class RunSimulator
     private IReadOnlyList<IReadOnlyList<CardModel>>? _pendingBundles;
     private TaskCompletionSource<IEnumerable<CardModel>>? _pendingBundleTcs;
 
+    private bool _combatHandlersRegistered;
+    private bool _selectorInstalled;
+
+    /// <summary>
+    /// Tear down the previous run so one process can play many runs back to back
+    /// (process startup costs ~0.5 s, far more than a typical decision).
+    /// </summary>
+    private void ResetForNewRun()
+    {
+        Log("Cleaning up previous run");
+        try { _cardSelector.CancelPending(); } catch { }
+        try { if (_cardSelector.HasPendingReward) _cardSelector.SkipReward(); } catch { }
+        _pendingBundleTcs?.TrySetCanceled();
+        _pendingBundles = null;
+        _pendingBundleTcs = null;
+        _syncCtx.Pump();
+        try { RunManager.Instance.CleanUp(true); }
+        catch (Exception ex) { Log($"CleanUp: {ex.Message}"); }
+        _syncCtx.Pump();
+        _runState = null;
+        _eventOptionChosen = false;
+        _eventChooseTask = null;
+        _lastEventOptionCount = 0;
+        _pendingRewards = null;
+        _pendingCardReward = null;
+        _rewardsProcessed = false;
+        _goldBeforeCombat = 0;
+        _lastKnownHp = 0;
+        _turnStarted.Reset();
+        _combatEnded.Reset();
+    }
+
     public Dictionary<string, object?> StartRun(string character, int ascension = 0, string? seed = null, string lang = "en")
     {
         try
@@ -243,6 +275,7 @@ public class RunSimulator
                 return Error($"Unknown character: {character}");
 
             var seedStr = seed ?? "headless_" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            if (_runState != null) ResetForNewRun();
             Log($"Creating RunState with seed={seedStr}");
 
             // Use CreateForTest which properly handles mutable copies internally
@@ -268,9 +301,13 @@ public class RunSimulator
             RunManager.Instance.Launch();
             Log("Run launched");
 
-            // Register event handlers for combat turn transitions
-            CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
-            CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
+            // Register event handlers for combat turn transitions (once per process)
+            if (!_combatHandlersRegistered)
+            {
+                CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
+                CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
+                _combatHandlersRegistered = true;
+            }
 
             // Finalize starting relics
             RunManager.Instance.FinalizeStartingRelics().GetAwaiter().GetResult();
@@ -280,8 +317,12 @@ public class RunSimulator
             RunManager.Instance.EnterAct(0, doTransition: false).GetAwaiter().GetResult();
             Log("Entered Act 0");
 
-            // Register card selector for cards that need player choice
-            CardSelectCmd.UseSelector(_cardSelector);
+            // Register card selector for cards that need player choice (process-global, once)
+            if (!_selectorInstalled)
+            {
+                CardSelectCmd.UseSelector(_cardSelector);
+                _selectorInstalled = true;
+            }
             LocPatches._bundleSimRef = this;
 
             // Now we should be at the map — detect decision point
@@ -524,7 +565,7 @@ public class RunSimulator
 
             CombatManager.Instance.TurnStarted += _ => _turnStarted.Set();
             CombatManager.Instance.CombatEnded += _ => _combatEnded.Set();
-            CardSelectCmd.UseSelector(_cardSelector);
+            if (!_selectorInstalled) { CardSelectCmd.UseSelector(_cardSelector); _selectorInstalled = true; }
             LocPatches._bundleSimRef = this;
 
             var savedRoom = _runState.CurrentRoom;
@@ -2938,6 +2979,7 @@ public class RunSimulator
                 {
                     _syncCtx.Pump();
                     if (!executor.IsRunning) break;
+                    if (_cardSelector.HasPending || _cardSelector.HasPendingReward || _pendingBundles != null) break;
                     Thread.Sleep(1);
                 }
             }
@@ -3392,9 +3434,12 @@ public class RunSimulator
 
         public void ResolvePending(IEnumerable<CardModel> selected)
         {
-            _pendingTcs?.TrySetResult(selected);
+            // Clear before completing: TrySetResult runs the game's continuation inline, and
+            // that continuation may immediately open the next selection, which must survive.
+            var tcs = _pendingTcs;
             PendingOptions = null;
             _pendingTcs = null;
+            tcs?.TrySetResult(selected);
         }
 
         public void ResolvePendingByIndices(int[] indices)
@@ -3409,9 +3454,10 @@ public class RunSimulator
 
         public void CancelPending()
         {
-            _pendingTcs?.TrySetResult(Array.Empty<CardModel>());
+            var tcs = _pendingTcs;
             PendingOptions = null;
             _pendingTcs = null;
+            tcs?.TrySetResult(Array.Empty<CardModel>());
         }
 
         // Pending card reward from events (GetSelectedCardReward blocks until resolved)
