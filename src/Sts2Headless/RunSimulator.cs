@@ -1437,7 +1437,9 @@ public class RunSimulator
             return Error("Not in a shop");
 
         var removal = merchantRoom.GetLocalInventory().CardRemovalEntry;
-        if (removal == null) return Error("No card removal available");
+        if (removal == null || !removal.IsStocked) return Error("No card removal available");
+        if (!MegaCrit.Sts2.Core.Hooks.Hook.ShouldAllowMerchantCardRemoval(_runState!, player))
+            return Error("Card removal is not allowed");
         if (player.Gold < removal.Cost) return Error("Not enough gold");
 
         try
@@ -1527,6 +1529,10 @@ public class RunSimulator
         if (_runState?.CurrentRoom is MerchantRoom)
         {
             WaitForTask(_shopTask, 2000);  // was a fixed 200 ms sleep
+            // the shop UI marks the removal used after a successful purchase (once per shop visit)
+            if (_shopTask is Task<bool> removed && removed.IsCompletedSuccessfully && removed.Result
+                && _runState?.CurrentRoom is MerchantRoom mroom)
+                mroom.GetLocalInventory().CardRemovalEntry?.SetUsed();
             _syncCtx.Pump();
             WaitForActionExecutor();
             Log("Card selection in shop (card removal), refreshing shop state");
@@ -2837,7 +2843,10 @@ public class RunSimulator
             ["cards"] = cards,
             ["relics"] = relics,
             ["potions"] = potions,
-            ["card_removal_cost"] = removal?.Cost,
+            // Removal is once per shop visit and can be forbidden by relics; both checks live in the shop
+            // UI (NMerchantCardRemoval), so apply them here: hide the option when used or disallowed.
+            ["card_removal_cost"] = (removal != null && removal.IsStocked
+                && MegaCrit.Sts2.Core.Hooks.Hook.ShouldAllowMerchantCardRemoval(_runState!, player)) ? removal.Cost : null,
             ["player"] = PlayerSummary(player),
         };
     }
