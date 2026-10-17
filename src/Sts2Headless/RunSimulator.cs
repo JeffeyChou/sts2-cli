@@ -3078,7 +3078,7 @@ public class RunSimulator
         // for unmodded runs. TestMode skips filesystem/workshop mod loading.
         MegaCrit.Sts2.Core.Modding.ModManager.Initialize(
             new MegaCrit.Sts2.Core.Modding.ModManagerFileIo(), null, null).GetAwaiter().GetResult();
-        MegaCrit.Sts2.Core.Modding.AssemblyInfo.Init();
+        // v0.107.1: AssemblyInfo does not exist yet (added in v0.111).
 
         // Install inline sync context on main thread
         SynchronizationContext.SetSynchronizationContext(_syncCtx);
@@ -3750,7 +3750,8 @@ public class RunSimulator
         {
             try
             {
-                await CreatureCmd.Damage(ctx, play.Target!, card.DynamicVars.Damage, card, play);
+                await CreatureCmd.Damage(ctx, play.Target!, card.DynamicVars.Damage.BaseValue,
+                    MegaCrit.Sts2.Core.ValueProps.ValueProp.Move, card);
                 await PowerCmd.Apply<WeakPower>(ctx, play.Target!, card.DynamicVars["WeakPower"].BaseValue,
                     card.Owner.Creature, card, false);
             }
