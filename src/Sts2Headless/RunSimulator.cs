@@ -250,6 +250,25 @@ public class RunSimulator
         try { RunManager.Instance.CleanUp(true); }
         catch (Exception ex) { Log($"CleanUp: {ex.Message}"); }
         _syncCtx.Pump();
+        // A run torn down mid-fight never fires CombatEnded, so the static NetCombatCardDb keeps its pile
+        // subscriptions (and through them the whole old run: ~0.3 MB per load_save), and NetLoadingHandle keeps
+        // every net service. Run their own cleanup.
+        try
+        {
+            typeof(NetCombatCardDb).GetMethod("OnCombatEnded", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?.Invoke(NetCombatCardDb.Instance, new object?[] { null });
+        }
+        catch (Exception ex) { Log($"NetCombatCardDb cleanup: {ex.Message}"); }
+        try
+        {
+            (typeof(MegaCrit.Sts2.Core.Multiplayer.Game.NetLoadingHandle)
+                .GetField("_loadCounts", BindingFlags.NonPublic | BindingFlags.Static)
+                ?.GetValue(null) as System.Collections.IDictionary)?.Clear();
+        }
+        catch (Exception ex) { Log($"NetLoadingHandle cleanup: {ex.Message}"); }
+        // The test-mode file store records every call with its arguments (whole save files) forever.
+        try { ClearMockFileIoCalls(); }
+        catch (Exception ex) { Log($"MockGodotFileIo cleanup: {ex.Message}"); }
         // Completing the old run's prompts above runs its continuations inline, which can open new
         // prompts for the dead run; drop them so they don't leak into the next run.
         _cardSelector.Drop();
@@ -266,6 +285,25 @@ public class RunSimulator
         _lastKnownHp = 0;
         _turnStarted.Reset();
         _combatEnded.Reset();
+    }
+
+    /// <summary>Find the MockGodotFileIo instances reachable from SaveManager's statics (a few fields deep) and
+    /// clear their Calls logs.</summary>
+    private static void ClearMockFileIoCalls()
+    {
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var queue = new Queue<(object obj, int depth)>();
+        foreach (var f in typeof(MegaCrit.Sts2.Core.Saves.SaveManager).GetFields(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public))
+            if (f.GetValue(null) is { } v) queue.Enqueue((v, 0));
+        while (queue.Count > 0)
+        {
+            var (obj, depth) = queue.Dequeue();
+            if (!seen.Add(obj)) continue;
+            if (obj is MegaCrit.Sts2.Core.Saves.Test.MockGodotFileIo mock) { mock.Calls.Clear(); continue; }
+            if (depth >= 3 || obj is string || obj.GetType().IsPrimitive) continue;
+            foreach (var f in obj.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public))
+                if (!f.FieldType.IsValueType && f.GetValue(obj) is { } v) queue.Enqueue((v, depth + 1));
+        }
     }
 
     public Dictionary<string, object?> StartRun(string character, int ascension = 0, string? seed = null, string lang = "en")
