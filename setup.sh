@@ -151,6 +151,8 @@ using System;
 using System.IO;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
+using System.Collections.Generic;
+using System.Linq;
 
 var dllPath = args[0];
 Console.WriteLine($"Patching {dllPath}...");
@@ -216,6 +218,64 @@ foreach (var type in module.Types)
     }
 }
 
+// Patch 3: NDebugAudioManager sound methods -> no-ops. Instance is null headless and several
+// gameplay paths (Dig rest option, Jungle Maze Adventure, Dense Vegetation, Doll Room) call
+// Instance.Play() unguarded; the runtime side returns an inert Instance (RunSimulator.PatchDebugAudio).
+foreach (var type in module.Types)
+{
+    if (type.FullName != "MegaCrit.Sts2.Core.Audio.Debug.NDebugAudioManager") continue;
+    foreach (var method in type.Methods)
+    {
+        if (method.Body == null || method.IsStatic || method.IsConstructor) continue;
+        if (method.Name != "Play" && !method.Name.StartsWith("Stop") && !method.Name.EndsWith("AudioVolume")) continue;
+        if (method.ReturnType.MetadataType != MetadataType.Void && method.ReturnType.MetadataType != MetadataType.Int32) continue;
+        var il = method.Body.GetILProcessor();
+        il.Body.Instructions.Clear();
+        il.Body.ExceptionHandlers.Clear();
+        il.Body.Variables.Clear();
+        if (method.ReturnType.MetadataType == MetadataType.Int32) il.Emit(OpCodes.Ldc_I4_0);
+        il.Emit(OpCodes.Ret);
+        patches++;
+        Console.WriteLine($"  Patched {type.Name}.{method.Name} -> no-op");
+    }
+}
+
+// Patch 4: gameplay code (events like Dense Vegetation, Punch Off, Amalgamator) calls
+// NGame.Instance.ScreenShake*/ScreenRumble unguarded; NGame.Instance is null headless, so the
+// event option throws and silently never completes. Replace those void calls with pops of the
+// receiver and arguments. UI node code (MegaCrit.Sts2.Core.Nodes.*) is left untouched.
+var shakeNames = new HashSet<string> { "ScreenShake", "ScreenRumble", "ScreenShakeTrauma" };
+IEnumerable<TypeDefinition> AllTypes(IEnumerable<TypeDefinition> ts) { foreach (var t in ts) { yield return t; foreach (var n in AllTypes(t.NestedTypes)) yield return n; } }
+foreach (var type in AllTypes(module.Types))
+{
+    if (type.Namespace.StartsWith("MegaCrit.Sts2.Core.Nodes") || (type.DeclaringType?.Namespace ?? "").StartsWith("MegaCrit.Sts2.Core.Nodes")) continue;
+    foreach (var method in type.Methods)
+    {
+        if (method.Body == null) continue;
+        var ins = method.Body.Instructions;
+        for (int k = 0; k < ins.Count; k++)
+        {
+            if ((ins[k].OpCode == OpCodes.Callvirt || ins[k].OpCode == OpCodes.Call) && ins[k].Operand is MethodReference mr
+                && mr.DeclaringType.Name == "NGame" && shakeNames.Contains(mr.Name) && mr.ReturnType.MetadataType == MetadataType.Void)
+            {
+                int pops = mr.Parameters.Count + 1;
+                ins[k].OpCode = OpCodes.Pop; ins[k].Operand = null;
+                for (int q = 1; q < pops; q++) ins.Insert(k + 1, Instruction.Create(OpCodes.Pop));
+                patches++;
+                Console.WriteLine($"  Patched {type.FullName}.{method.Name}: NGame.{mr.Name} -> pop x{pops}");
+            }
+        }
+    }
+}
+
+// The Windows build marks pure-IL sts2.dll as x64-only; mark AnyCPU so arm64 hosts can load it.
+if (module.Architecture != TargetArchitecture.I386 && module.Attributes.HasFlag(ModuleAttributes.ILOnly))
+{
+    module.Architecture = TargetArchitecture.I386;
+    module.Attributes &= ~(ModuleAttributes.Required32Bit | ModuleAttributes.Preferred32Bit);
+    Console.WriteLine($"  Marked {Path.GetFileName(dllPath)} AnyCPU");
+}
+
 Console.WriteLine($"Applied {patches} patches");
 var outPath = dllPath + ".patched";
 module.Write(outPath);
@@ -228,6 +288,8 @@ CSHARP
 REPO_DIR="$(pwd)"
 cd "$PATCH_DIR"
 $DOTNET run -- "$REPO_DIR/lib/sts2.dll" 2>&1
+# Steamworks.NET.dll from the Windows build is also x64-only; the patcher marks it AnyCPU.
+[ -f "$REPO_DIR/lib/Steamworks.NET.dll" ] && $DOTNET run -- "$REPO_DIR/lib/Steamworks.NET.dll" 2>&1
 cd "$REPO_DIR"
 rm -rf "$PATCH_DIR"
 

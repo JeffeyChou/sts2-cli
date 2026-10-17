@@ -3195,6 +3195,7 @@ public class RunSimulator
         // Patch TalkCmd.Play to a no-op (issue #64). Monster speech-bubble VFX during
         // moves (e.g. BygoneEffigy.WakeMove) NRE in headless and break the enemy turn.
         PatchTalkCmd();
+        PatchDebugAudio();
 
         // Initialize localization system (needed for events, cards, etc.)
         InitLocManager();
@@ -3355,6 +3356,39 @@ public class RunSimulator
         {
             Console.Error.WriteLine($"[WARN] Failed to patch TalkCmd.Play: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// NDebugAudioManager.Instance is null headless, and several gameplay paths call
+    /// Instance.Play()/Stop() without a null check (Dig rest option, Jungle Maze Adventure,
+    /// Dense Vegetation, Doll Room). The NRE aborted the option silently, so the event looped.
+    /// Return an inert instance and make Play/Stop no-ops.
+    /// </summary>
+    private static void PatchDebugAudio()
+    {
+        try
+        {
+            var harmony = new Harmony("sts2headless.debugaudio");
+            var t = typeof(CombatManager).Assembly.GetType("MegaCrit.Sts2.Core.Audio.Debug.NDebugAudioManager");
+            if (t == null) { Console.Error.WriteLine("[WARN] NDebugAudioManager not found"); return; }
+            DebugAudioPatches.Dummy = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(t);
+            var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public;
+            var getter = t.GetProperty("Instance", flags)?.GetGetMethod();
+            if (getter != null)
+                harmony.Patch(getter, new HarmonyMethod(typeof(DebugAudioPatches).GetMethod(nameof(DebugAudioPatches.InstancePrefix), flags)));
+            // Play/Stop bodies are replaced with no-ops at IL level by setup.sh (Patch 3).
+            Console.Error.WriteLine("[INFO] Patched NDebugAudioManager to an inert headless instance");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[WARN] Failed to patch NDebugAudioManager: {ex.Message}");
+        }
+    }
+
+    internal static class DebugAudioPatches
+    {
+        public static object? Dummy;
+        public static bool InstancePrefix(ref object __result) { __result = Dummy!; return false; }
     }
 
     private static void PatchTaskYield()
