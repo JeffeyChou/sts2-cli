@@ -1378,7 +1378,12 @@ public class RunSimulator
             // pending selection appears so the caller can resolve it; the background task
             // continues once the selector's TCS is fed by select_cards.
             var inv = merchantRoom.GetLocalInventory();
+            // read these before purchasing: a successful purchase clears entry.Model (ClearAfterPurchase)
+            var relicName = entry.Model?.GetType().Name ?? "?";
+            var relicCost = entry.Cost;
             var task = Task.Run(() => entry.OnTryPurchaseWrapper(inv));
+            _shopTask = task;  // a pickup selection (e.g. Royal Stamp) resumes it; select_cards waits on it
+            _shopTaskIsRemoval = false;
             for (int i = 0; i < 100; i++)
             {
                 _syncCtx.Pump();
@@ -1389,14 +1394,14 @@ public class RunSimulator
             }
             if (_cardSelector.HasPending || _cardSelector.HasPendingReward || _pendingBundles != null)
             {
-                Log($"Buy relic {entry.Model.GetType().Name}: yielded for pending selection");
+                Log($"Buy relic {relicName}: yielded for pending selection");
                 return DetectDecisionPoint();
             }
             if (!task.IsCompleted) task.Wait(2000);
             _syncCtx.Pump();
-            Log($"Bought relic: {entry.Model.GetType().Name} for {entry.Cost}g");
+            Log($"Bought relic: {relicName} for {relicCost}g");
         }
-        catch (Exception ex) { return Error($"Buy relic failed: {ex.Message}"); }
+        catch (Exception ex) { return ErrorWithTrace("Buy relic failed", ex); }
 
         return DetectDecisionPoint();
     }
@@ -1420,7 +1425,7 @@ public class RunSimulator
         {
             entry.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()).GetAwaiter().GetResult();
             _syncCtx.Pump();
-            Log($"Bought potion: {entry.Model.GetType().Name} for {entry.Cost}g");
+            Log($"Bought potion for {entry.Cost}g");  // entry.Model is cleared by a successful purchase
         }
         catch (Exception ex)
         {
@@ -1447,6 +1452,7 @@ public class RunSimulator
             // Run on background thread so card selection can pause (same pattern as event options)
             var task = Task.Run(() => removal.OnTryPurchaseWrapper(merchantRoom.GetLocalInventory()));
             _shopTask = task;
+            _shopTaskIsRemoval = true;
             for (int i = 0; i < 100; i++)
             {
                 _syncCtx.Pump();
@@ -1530,7 +1536,7 @@ public class RunSimulator
         {
             WaitForTask(_shopTask, 2000);  // was a fixed 200 ms sleep
             // the shop UI marks the removal used after a successful purchase (once per shop visit)
-            if (_shopTask is Task<bool> removed && removed.IsCompletedSuccessfully && removed.Result
+            if (_shopTaskIsRemoval && _shopTask is Task<bool> removed && removed.IsCompletedSuccessfully && removed.Result
                 && _runState?.CurrentRoom is MerchantRoom mroom)
                 mroom.GetLocalInventory().CardRemovalEntry?.SetUsed();
             _syncCtx.Pump();
@@ -2968,6 +2974,7 @@ public class RunSimulator
     /// </summary>
     private Task? _restTask;
     private Task? _shopTask;
+    private bool _shopTaskIsRemoval;
 
     /// <summary>Pump until the task completes (or it blocks on a new prompt / times out).</summary>
     private void WaitForTask(Task? task, int timeoutMs)
