@@ -2348,10 +2348,19 @@ public class RunSimulator
                 // Enemy powers
                 var ePowers = e.Powers?.Select(pw => new Dictionary<string, object?>
                 {
+                    ["id"] = pw.Id.Entry,
                     ["name"] = _loc.Power(pw.Id.Entry),
                     ["description"] = _loc.Bilingual("powers", pw.Id.Entry + ".description"),
                     ["amount"] = pw.Amount,
                 }).ToList();
+                // Surrounded (Kaiser Crab): the player faces left/right; the enemy behind deals x1.5 and
+                // targeting an enemy turns the player toward it. Localized names ("Back Attack") hide which
+                // side each enemy is on, so expose side and whether it is currently behind the player.
+                string? side = e.Powers?.Any(pw => pw is MegaCrit.Sts2.Core.Models.Powers.BackAttackLeftPower) == true ? "left"
+                    : e.Powers?.Any(pw => pw is MegaCrit.Sts2.Core.Models.Powers.BackAttackRightPower) == true ? "right" : null;
+                var surrounded = player.Creature?.Powers?.OfType<MegaCrit.Sts2.Core.Models.Powers.SurroundedPower>().FirstOrDefault();
+                bool? behind = side == null || surrounded == null ? null
+                    : (surrounded.Facing.ToString() == "Right" && side == "left") || (surrounded.Facing.ToString() == "Left" && side == "right");
 
                 return new Dictionary<string, object?>
                 {
@@ -2363,12 +2372,16 @@ public class RunSimulator
                     ["intents"] = intents.Count > 0 ? intents : null,
                     ["intends_attack"] = e.Monster?.IntendsToAttack ?? false,
                     ["powers"] = ePowers?.Count > 0 ? ePowers : null,
+                    ["side"] = side,
+                    ["behind"] = behind,
                 };
             }).ToList() ?? new();
 
         // Player powers/buffs
         var playerPowers = player.Creature?.Powers?.Select(pw => new Dictionary<string, object?>
         {
+            ["id"] = pw.Id.Entry,
+            ["facing"] = (pw as MegaCrit.Sts2.Core.Models.Powers.SurroundedPower)?.Facing.ToString(),
             ["name"] = _loc.Power(pw.Id.Entry),
             ["description"] = _loc.Bilingual("powers", pw.Id.Entry + ".description"),
             ["amount"] = pw.Amount,
