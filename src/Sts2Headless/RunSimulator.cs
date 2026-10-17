@@ -1223,6 +1223,7 @@ public class RunSimulator
             Thread.Sleep(50);
             _syncCtx.Pump();
             WaitForActionExecutor();
+            WaitForEventChooseTask();
             return DetectDecisionPoint();
         }
 
@@ -1264,6 +1265,7 @@ public class RunSimulator
             Thread.Sleep(50);
             _syncCtx.Pump();
             WaitForActionExecutor();
+            WaitForEventChooseTask();
             return DetectDecisionPoint();
         }
         if (_pendingCardReward != null)
