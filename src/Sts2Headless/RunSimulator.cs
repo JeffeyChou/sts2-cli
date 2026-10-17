@@ -1140,6 +1140,7 @@ public class RunSimulator
                 for (int i = 0; i < 50; i++)
                 {
                     _syncCtx.Pump();
+                    if (SelectionPending()) break;
                     if (_turnStarted.IsSet || _combatEnded.IsSet) break;
                     if (!CombatManager.Instance.IsInProgress || player.Creature.IsDead) break;
                     if (IsPlayPhase()) break;
@@ -1150,6 +1151,15 @@ public class RunSimulator
         finally
         {
             YieldPatches.SuppressYield = false;
+        }
+
+        // An enemy move can ask the player to choose mid-enemy-turn (Knowledge Demon's Curse of Knowledge:
+        // choose a curse). That is not a deadlock: surface the choice; select_cards resumes the enemy turn.
+        // (Before, the cancel/retry/"nuclear" fallbacks below ran here and forced a game_over.)
+        if (SelectionPending())
+        {
+            Log("EndTurn: enemy turn waiting on a player choice; surfacing it");
+            return DetectDecisionPoint();
         }
 
         // Second fallback: if still stuck after SuppressYield window, cancel and retry.
@@ -1516,6 +1526,7 @@ public class RunSimulator
         _syncCtx.Pump();
         WaitForActionExecutor();
         WaitForEventChooseTask();
+        FinishEnemyTurnIfInProgress(player);
 
         // Extra wait for rest-site SMITH: the background ChooseLocalOption task
         // needs time to complete the upgrade after card selection resolves.
@@ -1556,6 +1567,7 @@ public class RunSimulator
             _syncCtx.Pump();
             WaitForActionExecutor();
             WaitForEventChooseTask();
+            FinishEnemyTurnIfInProgress(player);
         }
         return DetectDecisionPoint();
     }
@@ -2972,6 +2984,28 @@ public class RunSimulator
     /// stale option page (Neow re-offered its blessings until a wall-clock race resolved).
     /// Pump until the task completes or it blocks on another selection.
     /// </summary>
+    private bool SelectionPending() => _cardSelector.HasPending || _cardSelector.HasPendingReward || _pendingBundles != null;
+
+    /// <summary>After a choice made during the enemy turn, let the enemy turn run to the next player turn.</summary>
+    private void FinishEnemyTurnIfInProgress(Player player)
+    {
+        if (_runState?.CurrentRoom is not CombatRoom || !CombatManager.Instance.IsInProgress) return;
+        if (IsPlayPhase() || player.Creature.IsDead || SelectionPending()) return;
+        YieldPatches.SuppressYield = true;
+        try
+        {
+            for (int i = 0; i < 400; i++)
+            {
+                _syncCtx.Pump();
+                if (SelectionPending()) break;
+                if (!CombatManager.Instance.IsInProgress || player.Creature.IsDead || IsPlayPhase()) break;
+                Thread.Sleep(5);
+            }
+        }
+        finally { YieldPatches.SuppressYield = false; }
+        _syncCtx.Pump();
+    }
+
     private Task? _restTask;
     private Task? _shopTask;
     private bool _shopTaskIsRemoval;
