@@ -186,6 +186,13 @@ class Program
                 return sim.SetDrawOrder(cards);
             }
 
+            case "perturb_rng":
+            {
+                // Honest lookahead: re-randomise the future (encounters, rewards, enemy AI, shuffles) from here.
+                var salt = cmd.TryGetProperty("salt", out var sv) ? sv.GetInt32() : 0;
+                return sim.PerturbRng(salt);
+            }
+
             case "write_continue_save":
             {
                 var outputPath = cmd.TryGetProperty("path", out var op) ? op.GetString() : null;

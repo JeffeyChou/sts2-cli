@@ -576,6 +576,94 @@ public class RunSimulator
         catch (Exception ex) { return ErrorWithTrace("SetDrawOrder failed", ex); }
     }
 
+    /// <summary>
+    /// Advance every RNG stream of the run and of each player by a salt-dependent number of draws. The current
+    /// state is unchanged; everything random that happens afterwards (map encounters, rewards, enemy moves,
+    /// shuffles, generated cards) follows a different future. Search rollouts call this so they cannot exploit the
+    /// seed's fixed future (evaluation of "honest" play).
+    /// </summary>
+    public Dictionary<string, object?> PerturbRng(int salt)
+    {
+        try
+        {
+            if (_runState == null) return Error("No run in progress");
+            var rnd = new System.Random(salt);
+            var streams = new List<object>();
+            var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+            void Collect(object? o, int depth)
+            {
+                if (o == null || depth > 3 || !seen.Add(o)) return;
+                var t = o.GetType();
+                if (t.Name == "Rng") { streams.Add(o); return; }
+                if (o is System.Collections.IDictionary dict)
+                {
+                    foreach (var v in dict.Values) Collect(v, depth + 1);
+                    return;
+                }
+                if (o is System.Collections.IEnumerable en && o is not string)
+                {
+                    foreach (var v in en) Collect(v, depth + 1);
+                    return;
+                }
+                var ns = t.Namespace ?? "";
+                if (!(t.Name.EndsWith("RngSet") || ns.Contains("Rngs") || ns.EndsWith(".Random"))) return;
+                foreach (var f in t.GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
+                                              | System.Reflection.BindingFlags.NonPublic))
+                    Collect(f.GetValue(o), depth + 1);
+            }
+            object? Prop(object o, string name) =>
+                o.GetType().GetProperty(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
+                                              | System.Reflection.BindingFlags.NonPublic)?.GetValue(o);
+            Collect(Prop(_runState, "Rng"), 0);
+            foreach (var p in _runState.Players) Collect(Prop(p, "PlayerRng"), 0);
+            int draws = 0;
+            foreach (var r in streams)
+            {
+                var next = r.GetType().GetMethods().FirstOrDefault(m => m.Name == "NextInt" && m.GetParameters().Length == 1
+                    && m.GetParameters()[0].ParameterType == typeof(int));
+                if (next == null) continue;
+                int k = rnd.Next(1, 64);
+                for (int i = 0; i < k; i++) next.Invoke(r, new object[] { 1000 });
+                draws += k;
+            }
+            // the act's pre-generated queues (normal / elite encounters, events): shuffle what is not visited yet,
+            // in this act and the later ones; weak and regular normal encounters are shuffled separately
+            int shuffled = 0;
+            var bf = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+            void ShuffleTail(System.Collections.IList? list, int from, int to)
+            {
+                if (list == null) return;
+                to = Math.Min(to, list.Count);
+                for (int i = to - 1; i > from; i--)
+                {
+                    int j = rnd.Next(from, i + 1);
+                    (list[i], list[j]) = (list[j], list[i]);
+                }
+                shuffled += Math.Max(0, to - from);
+            }
+            for (int a = _runState.CurrentActIndex; a < _runState.Acts.Count; a++)
+            {
+                var act = _runState.Acts[a];
+                var rooms = typeof(ActModel).GetField("_rooms", bf)?.GetValue(act);
+                if (rooms == null) continue;
+                var rt = rooms.GetType();
+                int Visited(string f) => rt.GetField(f, bf)?.GetValue(rooms) is int v ? v : 0;
+                var normal = rt.GetField("normalEncounters", bf)?.GetValue(rooms) as System.Collections.IList;
+                int nv = Visited("normalEncountersVisited");
+                int weak = typeof(ActModel).GetProperty("NumberOfWeakEncounters", bf)?.GetValue(act) is int w ? w : 0;
+                ShuffleTail(normal, nv, weak);
+                ShuffleTail(normal, Math.Max(nv, weak), int.MaxValue);
+                ShuffleTail(rt.GetField("eliteEncounters", bf)?.GetValue(rooms) as System.Collections.IList,
+                            Visited("eliteEncountersVisited"), int.MaxValue);
+                ShuffleTail(rt.GetField("events", bf)?.GetValue(rooms) as System.Collections.IList,
+                            Visited("eventsVisited"), int.MaxValue);
+            }
+            return new Dictionary<string, object?> { ["type"] = "ok", ["streams"] = streams.Count, ["draws"] = draws,
+                                                     ["shuffled"] = shuffled };
+        }
+        catch (Exception ex) { return ErrorWithTrace("PerturbRng failed", ex); }
+    }
+
     // ─── Game actions ───
     public Dictionary<string, object?> LoadSave(string saveJson, string lang = "en")
     {
