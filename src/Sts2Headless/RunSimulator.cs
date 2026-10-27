@@ -435,10 +435,18 @@ public class RunSimulator
                 {
                     var id = cEl.GetString();
                     if (id == null) continue;
+                    // "ID+" (one '+' per level) adds the card upgraded, as GetUpgradedInfo upgrades a clone
+                    int ups = 0;
+                    while (id.EndsWith("+")) { ups++; id = id[..^1]; }
                     var canonical = ModelDb.GetById<CardModel>(new ModelId("CARD", id));
                     if (canonical != null)
                     {
                         var card = _runState.CreateCard(canonical, player);
+                        for (int u = 0; u < ups && card.IsUpgradable; u++)
+                        {
+                            card.UpgradeInternal();
+                            card.FinalizeUpgradeInternal();
+                        }
                         player.Deck.AddInternal(card, silent: true);
                     }
                 }
@@ -3290,6 +3298,8 @@ public class RunSimulator
                     ["vars"] = vars.Count > 0 ? vars : null,
                 };
             }).ToList(),
+            ["potion_slots"] = (GetBackingList<PotionModel>(player, "_potionSlots")
+                                ?? GetBackingList<PotionModel?>(player, "_potionSlots") as System.Collections.IList)?.Count,
             ["potions"] = player.Potions?.Select((p, i) =>
             {
                 if (p == null) return null;
