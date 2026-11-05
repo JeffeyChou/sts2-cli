@@ -1,5 +1,8 @@
 # sts2-cli
 
+> **RL fork.** Pinned to Slay the Spire 2 v0.107.1, with fidelity fixes, throughput work and protocol commands
+> for search (`perturb_rng`, `set_player`). See [FORK.md](FORK.md). Upstream: [wuhao21/sts2-cli](https://github.com/wuhao21/sts2-cli).
+
 <details open>
 <summary><b>English</b></summary>
 
