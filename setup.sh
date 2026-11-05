@@ -127,6 +127,12 @@ fi
 echo ""
 echo "🔧 .NET SDK: $DOTNET ($($DOTNET --version))"
 
+# ── Godot stubs first: the IL patcher resolves Godot types (UI calls it neutralizes) against GodotSharp.dll ──
+
+echo ""
+echo "🔨 Building the Godot stubs (GodotSharp.dll, needed by the IL patcher)..."
+$DOTNET build src/GodotStubs/GodotStubs.csproj 2>&1 | tail -2
+
 # ── IL Patch sts2.dll ──
 
 echo ""
