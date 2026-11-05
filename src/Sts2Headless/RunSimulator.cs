@@ -1968,7 +1968,14 @@ public class RunSimulator
         {
             if (combatRoom.IsPreFinished || !CombatManager.Instance.IsInProgress)
             {
-                // Final act boss → victory (same rule as DetectPostCombatState, #81).
+                // Final act boss → victory (same rule as DetectPostCombatState, #81) -- unless the Double Boss
+                // ascension (A10) still has the act's second boss ahead: then the map offers it (its child point).
+                if (_runState != null && _runState.CurrentActIndex >= 2 && SecondBossPending())
+                {
+                    Log("First of two final bosses defeated via Proceed: to the second boss");
+                    ForceToMap();
+                    return MapSelectState();
+                }
                 if (_runState != null && _runState.CurrentActIndex >= 2)
                 {
                     Log($"Final boss defeated via Proceed (Act {_runState.CurrentActIndex + 1}), reporting victory");
@@ -2649,6 +2656,12 @@ public class RunSimulator
         // map_select. Report victory directly in that case.
         if (combatRoom.RoomType == RoomType.Boss)
         {
+            if (_runState != null && _runState.CurrentActIndex >= 2 && SecondBossPending())
+            {
+                Log("First of two final bosses defeated: to the second boss (Double Boss ascension)");
+                ForceToMap();
+                return MapSelectState();
+            }
             if (_runState != null && _runState.CurrentActIndex >= 2)
             {
                 Log($"Final boss defeated (Act {_runState.CurrentActIndex + 1}), reporting victory");
@@ -2706,6 +2719,18 @@ public class RunSimulator
             ["gold_earned"] = _runState!.Players[0].Gold - _goldBeforeCombat,
             ["player"] = PlayerSummary(_runState!.Players[0]),
         };
+    }
+
+    /// <summary>Double Boss ascension (A10): the final act's map has a second boss point after the boss point
+    /// (StandardActMap.SecondBossMapPoint, a child of BossMapPoint); true while it has not been reached.</summary>
+    private bool SecondBossPending()
+    {
+        var map = _runState?.Map;
+        var second = map?.SecondBossMapPoint;
+        var cur = _runState?.CurrentMapCoord;
+        if (second == null || !cur.HasValue)
+            return false;
+        return !(cur.Value.col == second.coord.col && cur.Value.row == second.coord.row);
     }
 
     private void ForceToMap()
